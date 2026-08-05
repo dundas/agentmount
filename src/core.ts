@@ -4,7 +4,8 @@ export type FunctionalityKind = "read" | "proposal" | "effect";
 export type ApprovalMode = "none" | "runtime" | "environment";
 export type AuthorizerKind = "environment_native" | "mount_broker";
 export type ArgumentBinding = "environment_verified" | "broker_attested";
-export type RevocationProfile = "synchronous" | "cached";
+/** v1 requires authoritative revocation checks at effect time. Cached profiles are deferred. */
+export type RevocationProfile = "synchronous";
 export type ConformanceLevel = "L0" | "L1" | "L2" | "L3" | "L4";
 
 export type AgentMountErrorCode =
@@ -53,6 +54,8 @@ export interface ResolvedMountContext {
   environmentAccountId: string;
   agentId: string;
   releaseId: string;
+  /** Exact compiled artifact installed for this mount. */
+  artifactDigest: string;
   principalId: string;
   adapterDigest: string;
   policyVersion: string;
@@ -81,7 +84,9 @@ export interface EnvironmentManifest {
   protocolVersion: typeof AGENT_MOUNT_VERSION;
   environmentId: string;
   adapterVersion: string;
+  /** Digest of the canonical manifest with this field omitted. */
   adapterDigest: string;
+  revocation: { profile: RevocationProfile };
   functionality: readonly FunctionalityDefinition[];
   bindings: {
     chat?: { version: "agent-mount.chat/v1" };
@@ -96,12 +101,49 @@ export interface EffectAuthorization {
   bindingDigest: string;
   mountId: string;
   mountEpoch: number;
+  runGeneration: number;
   functionalityId: string;
   principalId: string;
   expiresAt: string;
   assurance: string;
   /** Required for broker attestations; the adapter must not hold this key. */
   attestation?: { keyId: string; signature: string };
+}
+
+/** Compile-time source. Mutable authority and runtime references are forbidden here. */
+export interface AgentSource {
+  protocolVersion: typeof AGENT_MOUNT_VERSION;
+  agentId: string;
+  sourceDigest: string;
+  instructions: string;
+  modelProfile: {
+    family: string;
+    parameters: Readonly<Record<string, unknown>>;
+  };
+  requestedFunctionality: readonly string[];
+}
+
+export interface MountArtifactPublisher {
+  keyId: string;
+  /** Signature over the artifactDigest string. */
+  signature: string;
+}
+
+/**
+ * Portable compiled output. artifactDigest excludes artifactDigest and
+ * publisher from its preimage; publisher.signature signs artifactDigest.
+ */
+export interface MountArtifact {
+  protocolVersion: typeof AGENT_MOUNT_VERSION;
+  artifactDigest: string;
+  agentId: string;
+  sourceDigest: string;
+  environmentId: string;
+  adapterDigest: string;
+  linkedFunctionality: readonly string[];
+  instructions: string;
+  modelProfile: AgentSource["modelProfile"];
+  publisher: MountArtifactPublisher;
 }
 
 export interface FunctionalityInvocation {
@@ -128,12 +170,14 @@ export interface FunctionalityInvoker {
 }
 
 const forbiddenContextKeys = new Set([
-  "mountId", "mount_id", "tenantId", "tenant_id", "principalId", "principal_id",
-  "environmentAccountId", "environment_account_id", "agentId", "agent_id",
-  "releaseId", "release_id", "adapterDigest", "adapter_digest", "policyVersion",
-  "policy_version", "mountEpoch", "mount_epoch", "runGeneration", "run_generation",
-  "grant", "credential", "token",
+  "mount_id", "tenant_id", "principal_id", "environment_account_id", "agent_id",
+  "release_id", "artifact_digest", "adapter_digest", "policy_version", "mount_epoch", "run_generation",
+  "runtime_session_generation", "client_turn_id", "grant", "credential", "token",
 ]);
+
+function normalizedArgumentKey(key: string): string {
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[^A-Za-z0-9]+/gu, "_").toLowerCase();
+}
 
 export function assertDomainArguments(value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -149,7 +193,7 @@ export function assertDomainArguments(value: unknown): asserts value is Record<s
       return;
     }
     for (const [key, item] of Object.entries(candidate as Record<string, unknown>)) {
-      if (forbiddenContextKeys.has(key)) {
+      if (forbiddenContextKeys.has(normalizedArgumentKey(key))) {
         throw new AgentMountError("invalid_argument", `Authority field is not allowed in functionality arguments: ${key}`);
       }
       inspect(item, depth + 1);
@@ -221,8 +265,12 @@ function encodeBase64Url(bytes: Uint8Array): string {
 }
 
 export function assertFunctionalityDefinition(definition: FunctionalityDefinition): void {
-  if (definition.kind === "effect" && !definition.intentResolutionDeadlineMs) {
+  if (definition.kind === "effect"
+    && (!Number.isSafeInteger(definition.intentResolutionDeadlineMs) || definition.intentResolutionDeadlineMs! <= 0)) {
     throw new AgentMountError("invalid_argument", `Effect functionality ${definition.id} requires intentResolutionDeadlineMs`);
+  }
+  if (definition.kind === "effect" && !definition.idempotencyRequired) {
+    throw new AgentMountError("invalid_argument", `Effect functionality ${definition.id} requires idempotency`);
   }
   if (!definition.reversible && definition.minimumConformanceLevel !== "L4") {
     throw new AgentMountError("invalid_argument", `Irreversible functionality ${definition.id} must require L4`);
@@ -234,16 +282,19 @@ export function assertEffectAuthorizationBinding(input: {
   context: ResolvedMountContext;
   functionality: FunctionalityDefinition;
   bindingDigest: string;
+  /** Explicit adapter key inventory. Required even when intentionally empty. */
+  adapterSigningKeyIds: readonly string[];
   now?: number;
 }): void {
   const { authorization, context, functionality, bindingDigest } = input;
   if (authorization.mountId !== context.mountId
-    || authorization.mountEpoch !== context.mountEpoch
     || authorization.functionalityId !== functionality.id
     || authorization.principalId !== context.principalId
     || authorization.bindingDigest !== bindingDigest) {
     throw new AgentMountError("argument_binding_mismatch");
   }
+  if (authorization.mountEpoch !== context.mountEpoch) throw new AgentMountError("mount_epoch_stale");
+  if (authorization.runGeneration !== context.runGeneration) throw new AgentMountError("run_generation_stale");
   const expiresAt = Date.parse(authorization.expiresAt);
   if (!Number.isFinite(expiresAt)) throw new AgentMountError("authorization_invalid");
   if ((input.now ?? Date.now()) >= expiresAt) throw new AgentMountError("authorization_expired");
@@ -258,5 +309,15 @@ export function assertEffectAuthorizationBinding(input: {
   if (authorization.authorizerKind === "mount_broker"
     && (!authorization.attestation?.keyId || !authorization.attestation.signature)) {
     throw new AgentMountError("authorization_invalid", "Broker authorization requires an independent attestation");
+  }
+  if (authorization.authorizerKind === "mount_broker" && !Array.isArray(input.adapterSigningKeyIds)) {
+    throw new AgentMountError("authorization_invalid", "Broker authorization requires an explicit adapter key inventory");
+  }
+  if (authorization.authorizerKind === "mount_broker"
+    && input.adapterSigningKeyIds.includes(authorization.attestation!.keyId)) {
+    throw new AgentMountError("authorization_invalid", "Broker attestation key is held by the adapter");
+  }
+  if (!functionality.reversible && authorization.authorizerKind !== "environment_native") {
+    throw new AgentMountError("authorization_invalid", "Irreversible functionality requires an environment-native authorizer");
   }
 }

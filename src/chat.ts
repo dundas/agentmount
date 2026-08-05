@@ -9,6 +9,12 @@ import {
 
 export const AGENT_MOUNT_CHAT_VERSION = "agent-mount.chat/v1" as const;
 
+/** Durable replay position. Sequence is monotonic only within one generation. */
+export interface StreamCursor {
+  generation: number;
+  sequence: number;
+}
+
 export type ChatContentPart =
   | { type: "text"; text: string }
   | { type: "attachment_ref"; attachmentId: string; mediaType?: string };
@@ -28,7 +34,7 @@ export type ChatClientCommand =
       type: "events.replay";
       mountId: string;
       threadId: string;
-      afterSequence: number;
+      after: StreamCursor;
       limit?: number;
     }
   | {
@@ -99,7 +105,7 @@ export interface ChatBindingStore {
     bindingDigest: string;
   }): Promise<AcceptedTurn>;
   appendEvent(context: ResolvedMountContext, body: ChatEventBody): Promise<ChatServerEvent>;
-  replay(reference: MountReference & { threadId: string }, afterSequence: number, limit: number): Promise<readonly ChatServerEvent[]>;
+  replay(reference: MountReference & { threadId: string }, after: StreamCursor, limit: number): Promise<readonly ChatServerEvent[]>;
 }
 
 export interface ChatRuntime {
@@ -161,14 +167,15 @@ export function createChatBinding(dependencies: ChatBindingDependencies) {
     async replay(command: Extract<ChatClientCommand, { type: "events.replay" }>): Promise<readonly ChatServerEvent[]> {
       assertVersion(command.version);
       const limit = Math.min(command.limit ?? maxReplayEvents, maxReplayEvents);
-      if (!Number.isInteger(command.afterSequence) || command.afterSequence < 0 || limit < 1) {
+      if (!isCursor(command.after) || limit < 1) {
         throw new AgentMountError("invalid_argument");
       }
-      await dependencies.resolveContext({ mountId: command.mountId, threadId: command.threadId });
+      const context = await dependencies.resolveContext({ mountId: command.mountId, threadId: command.threadId });
+      if (command.after.generation > context.runGeneration) throw new AgentMountError("run_generation_stale");
       const events = await dependencies.store.replay(
-        { mountId: command.mountId, threadId: command.threadId }, command.afterSequence, limit,
+        { mountId: command.mountId, threadId: command.threadId }, command.after, limit,
       );
-      assertOrderedEvents(events, command.mountId, command.threadId, command.afterSequence);
+      assertOrderedEvents(events, command.mountId, command.threadId, command.after, context.runGeneration);
       return events;
     },
 
@@ -204,13 +211,33 @@ function assertContent(content: readonly ChatContentPart[], maxTextChars: number
 }
 
 function assertOrderedEvents(
-  events: readonly ChatServerEvent[], mountId: string, threadId: string, afterSequence: number,
+  events: readonly ChatServerEvent[], mountId: string, threadId: string, after: StreamCursor, currentGeneration: number,
 ): void {
-  let previous = afterSequence;
+  let previous = after;
   for (const event of events) {
-    if (event.version !== AGENT_MOUNT_CHAT_VERSION || event.mountId !== mountId || event.threadId !== threadId || event.sequence <= previous) {
+    const cursor = { generation: event.runGeneration, sequence: event.sequence };
+    if (event.version !== AGENT_MOUNT_CHAT_VERSION
+      || event.mountId !== mountId
+      || event.threadId !== threadId
+      || !isCursor(cursor)
+      || cursor.sequence < 1
+      || cursor.generation > currentGeneration
+      || compareCursor(cursor, previous) <= 0) {
       throw new AgentMountError("environment_unavailable", "Invalid replay returned by environment");
     }
-    previous = event.sequence;
+    previous = cursor;
   }
+}
+
+function isCursor(value: unknown): value is StreamCursor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cursor = value as Record<string, unknown>;
+  return Number.isInteger(cursor.generation) && Number(cursor.generation) >= 0
+    && Number.isInteger(cursor.sequence) && Number(cursor.sequence) >= 0;
+}
+
+function compareCursor(left: StreamCursor, right: StreamCursor): number {
+  return left.generation === right.generation
+    ? left.sequence - right.sequence
+    : left.generation - right.generation;
 }

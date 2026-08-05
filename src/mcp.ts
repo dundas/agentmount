@@ -9,9 +9,11 @@ import {
   type FunctionalityDefinition,
   type FunctionalityInvoker,
   type FunctionalityOutcome,
+  type MountArtifact,
   type MountReference,
   type ResolvedMountContext,
 } from "./core.js";
+import { assertEnvironmentManifestDigest, verifyMountArtifact } from "./compiler.js";
 
 export const AGENT_MOUNT_MCP_VERSION = "agent-mount.mcp/v1" as const;
 
@@ -31,6 +33,8 @@ export interface McpToolRegistrar {
 
 export interface AgentMountMcpDependencies {
   manifest: EnvironmentManifest;
+  artifact: MountArtifact;
+  verifyArtifactSignature(input: { keyId: string; digest: string; signature: string }): Promise<boolean>;
   server: McpToolRegistrar;
   /** Connection-bound reference; never derive it from tool arguments. */
   mount: MountReference;
@@ -41,12 +45,22 @@ export interface AgentMountMcpDependencies {
     functionality: FunctionalityDefinition;
     bindingDigest: string;
   }): Promise<EffectAuthorization | undefined>;
-  /** Broker attestations from any adapter-held key are rejected before invocation. */
-  adapterSigningKeyIds?: readonly string[];
+  /** Explicit adapter key inventory; required even when intentionally empty. */
+  adapterSigningKeyIds: readonly string[];
   redactError?(error: unknown): string;
 }
 
-export function registerAgentMountMcpTools(dependencies: AgentMountMcpDependencies): readonly string[] {
+/** Async because manifest integrity is verified before any tool is registered. */
+export async function registerAgentMountMcpToolsAsync(dependencies: AgentMountMcpDependencies): Promise<readonly string[]> {
+  await assertEnvironmentManifestDigest(dependencies.manifest);
+  await verifyMountArtifact(dependencies.artifact, dependencies.verifyArtifactSignature);
+  if (dependencies.artifact.environmentId !== dependencies.manifest.environmentId
+    || dependencies.artifact.adapterDigest !== dependencies.manifest.adapterDigest) {
+    throw new AgentMountError("mount_inactive", "Compiled artifact does not target the registered manifest");
+  }
+  if (!Array.isArray(dependencies.adapterSigningKeyIds)) {
+    throw new AgentMountError("invalid_argument", "An explicit adapter key inventory is required");
+  }
   if (dependencies.manifest.bindings.mcp?.version !== AGENT_MOUNT_MCP_VERSION) {
     throw new AgentMountError("unsupported_binding");
   }
@@ -55,23 +69,38 @@ export function registerAgentMountMcpTools(dependencies: AgentMountMcpDependenci
     assertFunctionalityDefinition(functionality);
     if (names.has(functionality.id)) throw new AgentMountError("invalid_argument", `Duplicate functionality: ${functionality.id}`);
     names.add(functionality.id);
+  }
+  const linked = new Set(dependencies.artifact.linkedFunctionality);
+  for (const id of linked) {
+    if (!names.has(id)) throw new AgentMountError("functionality_denied", `Compiled functionality is absent from the manifest: ${id}`);
+  }
+  const artifactDigest = dependencies.artifact.artifactDigest;
+  // Expose nothing until the complete manifest has passed validation.
+  for (const functionality of dependencies.manifest.functionality.filter(({ id }) => linked.has(id))) {
     dependencies.server.registerTool(functionality.id, {
       title: functionality.title,
       description: functionality.description,
       inputSchema: functionality.inputSchema,
-    }, async (arguments_) => invokeTool(dependencies, functionality, arguments_));
+    }, async (arguments_) => invokeTool(dependencies, functionality, arguments_, artifactDigest));
   }
-  return [...names];
+  return [...linked].sort();
 }
 
 async function invokeTool(
   dependencies: AgentMountMcpDependencies,
   functionality: FunctionalityDefinition,
   rawArguments: Record<string, unknown>,
+  artifactDigest: string,
 ): Promise<McpToolResult> {
   try {
     assertDomainArguments(rawArguments);
     const context = await dependencies.resolveContext(dependencies.mount);
+    if (context.artifactDigest !== artifactDigest) {
+      throw new AgentMountError("mount_inactive", "Active mount does not match the registered compiled artifact");
+    }
+    if (context.adapterDigest !== dependencies.manifest.adapterDigest) {
+      throw new AgentMountError("mount_inactive", "Active adapter digest does not match the registered manifest");
+    }
     const { idempotencyKey, ...domainArguments } = rawArguments;
     if (functionality.idempotencyRequired && (typeof idempotencyKey !== "string" || idempotencyKey.length < 16)) {
       throw new AgentMountError("invalid_argument", "A stable idempotencyKey of at least 16 characters is required");
@@ -84,12 +113,13 @@ async function invokeTool(
       throw new AgentMountError("approval_required");
     }
     if (effectAuthorization) {
-      assertEffectAuthorizationBinding({ authorization: effectAuthorization, context, functionality, bindingDigest });
-      if (effectAuthorization.authorizerKind === "mount_broker"
-        && effectAuthorization.attestation
-        && dependencies.adapterSigningKeyIds?.includes(effectAuthorization.attestation.keyId)) {
-        throw new AgentMountError("authorization_invalid", "Broker attestation key is held by the adapter");
-      }
+      assertEffectAuthorizationBinding({
+        authorization: effectAuthorization,
+        context,
+        functionality,
+        bindingDigest,
+        adapterSigningKeyIds: dependencies.adapterSigningKeyIds,
+      });
     }
     const outcome = await dependencies.invoker.invoke({
       context,

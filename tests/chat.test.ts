@@ -6,6 +6,7 @@ const context: ResolvedMountContext = {
   protocolVersion: AGENT_MOUNT_VERSION,
   mountId: "mount_test", environmentId: "test", environmentAccountId: "account_test",
   agentId: "agent_test", releaseId: "release_test", principalId: "principal_test",
+  artifactDigest: "artifact_test",
   adapterDigest: "sha256:test", policyVersion: "policy_test", mountEpoch: 2,
   threadId: "thread_test", runId: "run_test", runGeneration: 3, traceId: "trace_test",
 };
@@ -63,7 +64,41 @@ describe("chat binding", () => {
     });
     await expect(binding.replay({
       version: AGENT_MOUNT_CHAT_VERSION, type: "events.replay", mountId: context.mountId,
-      threadId: context.threadId, afterSequence: 5,
+      threadId: context.threadId, after: { generation: context.runGeneration, sequence: 5 },
     })).rejects.toBeInstanceOf(AgentMountError);
+    await expect(binding.replay({
+      version: AGENT_MOUNT_CHAT_VERSION, type: "events.replay", mountId: context.mountId,
+      threadId: context.threadId, after: null as never,
+    })).rejects.toMatchObject({ code: "invalid_argument" });
+    await expect(binding.replay({
+      version: AGENT_MOUNT_CHAT_VERSION, type: "events.replay", mountId: context.mountId,
+      threadId: context.threadId, after: { generation: context.runGeneration + 1, sequence: 0 },
+    })).rejects.toMatchObject({ code: "run_generation_stale" });
+  });
+
+  test("allows sequence reset only when generation advances", async () => {
+    const events = [
+      { generation: 3, sequence: 6, eventId: "event_3_6" },
+      { generation: 4, sequence: 1, eventId: "event_4_1" },
+    ].map(({ generation, sequence, eventId }) => ({
+      version: AGENT_MOUNT_CHAT_VERSION, eventId, sequence,
+      mountId: context.mountId, threadId: context.threadId, runId: context.runId,
+      runGeneration: generation, traceId: context.traceId,
+      occurredAt: "2026-08-05T00:00:00.000Z", body: { type: "run.completed" } as const,
+    }));
+    const binding = createChatBinding({
+      resolveContext: async () => ({ ...context, runGeneration: 4 }),
+      store: {
+        acceptTurn: async (input) => ({ ...input, replayed: false }),
+        appendEvent: async () => events[0]!,
+        replay: async () => events,
+      },
+      runtime: { async *dispatch() {}, cancel: async () => undefined },
+      approvals: { decide: async () => undefined },
+    });
+    await expect(binding.replay({
+      version: AGENT_MOUNT_CHAT_VERSION, type: "events.replay", mountId: context.mountId,
+      threadId: context.threadId, after: { generation: 3, sequence: 5 },
+    })).resolves.toEqual(events);
   });
 });
