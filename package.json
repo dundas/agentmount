@@ -1,0 +1,33 @@
+{
+  "name": "@agentmount/contracts",
+  "version": "0.1.0-draft.0",
+  "description": "Transport-neutral contracts and binding boilerplate for mounting agents into applications and integrations",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "import": "./dist/chat.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    }
+  },
+  "files": ["dist", "examples", "README.md", "LICENSE", "spec"],
+  "scripts": {
+    "test": "bun test",
+    "check": "bunx tsc --noEmit",
+    "build": "bun build src/core.ts src/chat.ts src/mcp.ts --outdir dist --target node --format esm --external '*' && bunx tsc -p tsconfig.build.json",
+    "prepack": "bun run check && bun test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.20",
+    "typescript": "5.9.2"
+  }
+}

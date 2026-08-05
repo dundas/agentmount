@@ -33,6 +33,24 @@ executes the action exactly once.
 - **Environment adapter:** translates an app or integration's native events and
   APIs without exposing its credentials to the agent runtime.
 
+## Reusable bindings
+
+The draft package exposes three dependency-light entry points:
+
+- `@agentmount/contracts` — shared mount context, functionality, invocation,
+  authorization, result, and stable-error types.
+- `@agentmount/contracts/chat` — provider-neutral turn submission and durable,
+  resumable chat events.
+- `@agentmount/contracts/mcp` — middleware that projects granted manifest
+  functionality into MCP tools while keeping mount authority server-derived.
+
+Chat and MCP are optional interfaces of an environment mount. Chat
+authentication, MCP connection authentication, functionality grants, and
+native-effect authorization remain separate authorities.
+
+See [`examples/chat-binding.ts`](examples/chat-binding.ts) and
+[`examples/mcp-binding.ts`](examples/mcp-binding.ts) for integration skeletons.
+
 ## Status
 
 `agent-mount/v1` is a draft contract. See [the specification](spec/agent-mount-v1.md).
