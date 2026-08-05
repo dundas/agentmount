@@ -36,7 +36,8 @@
     "test": "bun test",
     "check": "bunx tsc --noEmit",
     "build": "bun build src/core.ts src/compiler.ts src/runtime.ts src/chat.ts src/mcp.ts src/conformance.ts --outdir dist --target node --format esm --external '*' && bunx tsc -p tsconfig.build.json",
-    "prepack": "bun run check && bun test && bun run build"
+    "prepack": "bun run check && bun test && bun run build",
+    "workflow:validate:closeout": "bun ./.ai/protocols/workflow-gates/validate-workflow-gates.ts closeout --root ."
   },
   "devDependencies": {
     "@types/bun": "1.2.20",

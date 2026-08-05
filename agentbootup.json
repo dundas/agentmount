@@ -1,0 +1,13 @@
+{
+  "version": "2.0",
+  "role": "project",
+  "project_id": "agentmount",
+  "agent_id": "agentmount",
+  "reports_to": "decisive",
+  "network": "../decisive_redux",
+  "capabilities": [
+    "sdk-integration",
+    "api-client",
+    "package-publishing"
+  ]
+}
