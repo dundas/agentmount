@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Test
+        run: bun test
+
+      # dist/ is committed so consumers can install straight from GitHub, where
+      # npm runs `prepare` (which this package does not define) rather than
+      # `prepack`. That only works if the checked-in output matches src/, so
+      # rebuild and fail on any drift.
+      - name: Build
+        run: bun run build
+
+      - name: Verify dist/ is in sync with src/
+        run: |
+          if ! git diff --exit-code --stat -- dist/; then
+            echo "::error::dist/ is out of date with src/. Run 'bun run build' and commit the result."
+            exit 1
+          fi
