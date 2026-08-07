@@ -1,0 +1,46 @@
+{
+  "name": "@agentmount/contracts",
+  "version": "0.1.0-draft.1",
+  "description": "Transport-neutral contracts and binding boilerplate for mounting agents into applications and integrations",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler.d.ts",
+      "import": "./dist/compiler.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "import": "./dist/chat.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./conformance": {
+      "types": "./dist/conformance.d.ts",
+      "import": "./dist/conformance.js"
+    }
+  },
+  "files": ["dist", "examples", "README.md", "LICENSE", "spec"],
+  "scripts": {
+    "test": "bun test",
+    "check": "bunx tsc --noEmit",
+    "build": "bun build src/core.ts src/compiler.ts src/runtime.ts src/chat.ts src/mcp.ts src/conformance.ts --outdir dist --target node --format esm --external '*' && bunx tsc -p tsconfig.build.json",
+    "prepack": "bun run check && bun test && bun run build",
+    "workflow:validate:closeout": "bun ./.ai/protocols/workflow-gates/validate-workflow-gates.ts closeout --root ."
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.20",
+    "typescript": "5.9.2"
+  }
+}

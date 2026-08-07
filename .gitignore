@@ -1,0 +1,60 @@
+# BEGIN brain-gitignore
+#
+# Brain artifacts go to agentbootup, NOT to git.
+# Code lives in git; brain (memory, skills, protocols, identity, runtime state) lives in the agentbootup registry.
+# This block is managed atomically — never edit content inside the BEGIN/END markers (it gets overwritten on next sync).
+# Project-specific entries belong below the END marker.
+# Canonical template: decisive_redux/brain/templates/brain.gitignore
+# Distribution: decisive_redux/brain/sync-skills.sh applies this block; agentbootup install applies it for new brains.
+
+# Memory (agentbootup restores MEMORY.md + protocols on install)
+memory/
+
+# AI protocols and skills
+.ai/
+
+# CLI-specific skill/agent/command trees
+.agents/
+.claude/agents/
+.claude/commands/
+.claude/hooks/
+.claude/skills/
+.gemini/
+.codex/
+.windsurf/
+.cursor/
+
+# Review and PR workflow output
+.reviews/
+.pr-review-loop/
+pr-review-loop-workspace/
+
+# Brain local state
+.brain/
+brain/collab/
+brain/roundtable/
+brain/templates/
+brain/CLAUDE.md
+brain/brain-msg.ts
+brain/lib/
+brain/config.json
+brain/config.secret.json
+
+# agentbootup runtime state
+.agentbootup-watch.json
+.agentbootup-watch.install.json
+.agentbootup-vault/
+.transcript-analyzer-state.json
+.transcript-sync-state.json
+
+# mech-run runtime state (NOT the mech-run repo itself — that's a real repo)
+.mech-run/
+
+# END brain-gitignore
+
+node_modules/
+dist/
+*.tgz
+# agentbootup: local brain runtime (.brain/)
+.brain/*
+!.brain/.gitkeep
