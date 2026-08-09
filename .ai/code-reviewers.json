@@ -1,0 +1,25 @@
+{
+  "solicit_review": {
+    "reviewers": [
+      {
+        "id": "claude-review",
+        "mention": "@claude",
+        "command": "github-actions:claude-review",
+        "family": "claude",
+        "approval_capable": true
+      }
+    ]
+  },
+  "pre_push_review": {
+    "id": "local-pre-push-review",
+    "required": true,
+    "family": "codex",
+    "approval_capable": false,
+    "invocation": "pre-push-gate"
+  },
+  "manual_approval": {
+    "allowed": true,
+    "named_humans": ["kefentse"],
+    "required_for": ["profile-change", "reviewer-policy-change"]
+  }
+}

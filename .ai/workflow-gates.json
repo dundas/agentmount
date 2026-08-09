@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "intended_mainline": "main",
+  "reviewer_config": ".ai/code-reviewers.json",
+  "active_surfaces": [
+    "src",
+    "tests",
+    "spec",
+    "README.md",
+    "package.json",
+    ".github"
+  ],
+  "retired_reviewers": [],
+  "authorized_skip_reasons": {},
+  "unattributed_worktrees_blocking": false
+}
