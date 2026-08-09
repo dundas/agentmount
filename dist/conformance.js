@@ -1,4 +1,6 @@
 // src/conformance.ts
+import { AGENT_MOUNT_VERSION, AgentMountError } from "./core.js";
+import { computeEnvironmentManifestDigest, computeMountArtifactDigest } from "./compiler.js";
 var AGENT_MOUNT_V1_CONFORMANCE_CASES = [
   "compile.link_narrows",
   "compile.deterministic_artifact_digest",
@@ -16,6 +18,12 @@ var AGENT_MOUNT_V1_CONFORMANCE_CASES = [
   "replay.persist_before_fanout",
   "intent.pending_becomes_indeterminate"
 ];
+var AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES = [
+  "compile.link_narrows",
+  "compile.deterministic_artifact_digest",
+  "compile.manifest_digest_binds_exports",
+  "compile.artifact_hygiene"
+];
 
 class AgentMountConformanceError extends Error {
   result;
@@ -25,6 +33,108 @@ class AgentMountConformanceError extends Error {
     this.result = result;
     this.name = "AgentMountConformanceError";
   }
+}
+function createAgentMountV1CompileConformanceExecutors(fixture, adapter) {
+  return {
+    "compile.link_narrows": async () => {
+      const unavailable = { ...fixture.source, requestedFunctionality: [...fixture.source.requestedFunctionality, "conformance.unavailable"] };
+      await expectAgentMountError(() => adapter.compile(unavailable, fixture.manifest), "functionality_denied", "An unavailable requested functionality must be denied");
+      const artifact = await adapter.compile(fixture.source, fixture.manifest);
+      const expected = [...fixture.source.requestedFunctionality].sort();
+      if (JSON.stringify(artifact.linkedFunctionality) !== JSON.stringify(expected)) {
+        throw new Error("Linked functionality must be exactly the requested, sorted functionality set");
+      }
+    },
+    "compile.deterministic_artifact_digest": async () => {
+      const first = await adapter.compile(fixture.source, fixture.manifest);
+      const second = await adapter.compile(fixture.source, fixture.manifest);
+      if (first.artifactDigest !== second.artifactDigest)
+        throw new Error("Artifact digest must be deterministic");
+      if (first.artifactDigest !== await computeMountArtifactDigest(first)) {
+        throw new Error("Artifact digest must bind the compiled artifact contents");
+      }
+    },
+    "compile.manifest_digest_binds_exports": async () => {
+      const staleManifest = {
+        ...fixture.manifest,
+        functionality: [...fixture.manifest.functionality, fixture.irreversibleEffect]
+      };
+      await expectAgentMountError(() => adapter.compile(fixture.source, staleManifest), "invalid_argument", "A manifest whose exports changed without recomputing adapterDigest must be denied");
+    },
+    "compile.artifact_hygiene": async () => {
+      const authorityBearingSource = { ...fixture.source, grant: "must-not-be-portable" };
+      await expectAgentMountError(() => adapter.compile(authorityBearingSource, fixture.manifest), "invalid_argument", "A portable source containing mutable authority must be denied");
+    }
+  };
+}
+async function createAgentMountV1ReferenceFixture() {
+  const read = {
+    id: "reference.item.get",
+    kind: "read",
+    title: "Get item",
+    description: "Read one item.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["id"], properties: { id: { type: "string", minLength: 1 } } },
+    approvalMode: "none",
+    reversible: true,
+    idempotencyRequired: false,
+    minimumConformanceLevel: "L0"
+  };
+  const reversibleEffect = {
+    id: "reference.item.upsert",
+    kind: "proposal",
+    title: "Upsert item",
+    description: "Create or update one item.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["title", "idempotencyKey"],
+      properties: { title: { type: "string", minLength: 1 }, idempotencyKey: { type: "string", minLength: 16, maxLength: 128 } }
+    },
+    approvalMode: "none",
+    reversible: true,
+    idempotencyRequired: true,
+    minimumConformanceLevel: "L2"
+  };
+  const irreversibleEffect = {
+    id: "reference.item.publish",
+    kind: "effect",
+    title: "Publish item",
+    description: "Irreversibly publish one item.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "idempotencyKey"],
+      properties: { id: { type: "string", minLength: 1 }, idempotencyKey: { type: "string", minLength: 16, maxLength: 128 } }
+    },
+    approvalMode: "environment",
+    reversible: false,
+    idempotencyRequired: true,
+    intentResolutionDeadlineMs: 30000,
+    minimumConformanceLevel: "L4"
+  };
+  const unsignedManifest = {
+    protocolVersion: AGENT_MOUNT_VERSION,
+    environmentId: "environment_reference",
+    adapterVersion: "0.1.0-draft.1",
+    adapterDigest: "",
+    revocation: { profile: "synchronous" },
+    functionality: [read, reversibleEffect, irreversibleEffect],
+    bindings: { chat: { version: "agent-mount.chat/v1" }, mcp: { version: "agent-mount.mcp/v1" } }
+  };
+  const manifest = { ...unsignedManifest, adapterDigest: await computeEnvironmentManifestDigest(unsignedManifest) };
+  return {
+    source: {
+      protocolVersion: AGENT_MOUNT_VERSION,
+      agentId: "agent_reference",
+      sourceDigest: "source_reference",
+      instructions: "Reference agent used by the product-neutral conformance fixture.",
+      modelProfile: { family: "portable", parameters: { temperature: 0 } },
+      requestedFunctionality: [read.id, reversibleEffect.id]
+    },
+    manifest,
+    reversibleEffect,
+    irreversibleEffect
+  };
 }
 async function runAgentMountV1Conformance(suite) {
   if (typeof suite.environmentId !== "string" || suite.environmentId.length === 0) {
@@ -51,9 +161,22 @@ async function assertAgentMountV1Conformance(suite) {
     throw new AgentMountConformanceError(result);
   return result;
 }
+async function expectAgentMountError(operation, code, message) {
+  try {
+    await operation();
+  } catch (error) {
+    if (error instanceof AgentMountError && error.code === code)
+      return;
+    throw new Error(`${message}; received ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
+  }
+  throw new Error(`${message}; operation succeeded`);
+}
 export {
   runAgentMountV1Conformance,
+  createAgentMountV1ReferenceFixture,
+  createAgentMountV1CompileConformanceExecutors,
   assertAgentMountV1Conformance,
   AgentMountConformanceError,
-  AGENT_MOUNT_V1_CONFORMANCE_CASES
+  AGENT_MOUNT_V1_CONFORMANCE_CASES,
+  AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES
 };

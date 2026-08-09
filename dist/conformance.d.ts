@@ -23,6 +23,8 @@ export interface AgentMountConformanceAdapter {
 }
 export declare const AGENT_MOUNT_V1_CONFORMANCE_CASES: readonly ["compile.link_narrows", "compile.deterministic_artifact_digest", "compile.manifest_digest_binds_exports", "compile.artifact_hygiene", "authority.ungranted_functionality_denied", "authority.revoked_mount_denied_before_effect", "authority.stale_run_generation_denied", "authority.forged_context_denied", "authority.broker_adapter_key_separation", "authority.argument_tampering_denied", "authority.irreversible_requires_l4_native", "replay.idempotent_turn", "replay.generation_cursor", "replay.persist_before_fanout", "intent.pending_becomes_indeterminate"];
 export type AgentMountV1ConformanceCase = (typeof AGENT_MOUNT_V1_CONFORMANCE_CASES)[number];
+export declare const AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES: readonly ["compile.link_narrows", "compile.deterministic_artifact_digest", "compile.manifest_digest_binds_exports", "compile.artifact_hygiene"];
+export type AgentMountV1CompileConformanceCase = (typeof AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES)[number];
 /** One product-neutral implementation for every required v1 conformance case. */
 export type AgentMountConformanceCaseExecutor = () => void | Promise<void>;
 /**
@@ -51,6 +53,14 @@ export declare class AgentMountConformanceError extends Error {
     readonly result: AgentMountV1ConformanceResult;
     constructor(result: AgentMountV1ConformanceResult);
 }
+/**
+ * Creates executable, product-neutral implementations of the v1 compile
+ * cases. Environments compose these with their authority, replay, and intent
+ * executors in one `AgentMountV1ConformanceSuite`.
+ */
+export declare function createAgentMountV1CompileConformanceExecutors(fixture: AgentMountConformanceFixture, adapter: Pick<AgentMountConformanceAdapter, "compile">): Readonly<Record<AgentMountV1CompileConformanceCase, AgentMountConformanceCaseExecutor>>;
+/** Product-neutral fixture for testing the shared compile cases and adapters. */
+export declare function createAgentMountV1ReferenceFixture(): Promise<AgentMountConformanceFixture>;
 /**
  * Runs every required v1 case in a deterministic order, collecting all case
  * failures so an environment can fix them in one test run.

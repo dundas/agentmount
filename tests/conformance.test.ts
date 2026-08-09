@@ -3,9 +3,12 @@ import {
   AGENT_MOUNT_V1_CONFORMANCE_CASES,
   AgentMountConformanceError,
   assertAgentMountV1Conformance,
+  createAgentMountV1CompileConformanceExecutors,
+  createAgentMountV1ReferenceFixture,
   runAgentMountV1Conformance,
   type AgentMountV1ConformanceCase,
 } from "../src/conformance.ts";
+import { attachMountArtifactPublisher, linkAgentSource } from "../src/compiler.ts";
 
 function suite(overrides: Partial<Record<AgentMountV1ConformanceCase, () => void | Promise<void>>> = {}) {
   return {
@@ -51,5 +54,31 @@ describe("AgentMount v1 conformance runner", () => {
     await expect(assertAgentMountV1Conformance(suite({
       "compile.link_narrows": () => { throw new Error("linking failure"); },
     }))).rejects.toBeInstanceOf(AgentMountConformanceError);
+  });
+
+  test("ships four reusable compile assertions that pass against the reference compiler", async () => {
+    const fixture = await createAgentMountV1ReferenceFixture();
+    const compile = async (source = fixture.source, manifest = fixture.manifest) =>
+      attachMountArtifactPublisher(await linkAgentSource(source, manifest), { keyId: "reference", signature: "reference" });
+    const executors = createAgentMountV1CompileConformanceExecutors(fixture, { compile });
+
+    for (const executor of Object.values(executors)) await executor();
+  });
+
+  test("compile assertions reject an adapter that widens linked functionality", async () => {
+    const fixture = await createAgentMountV1ReferenceFixture();
+    const executors = createAgentMountV1CompileConformanceExecutors(fixture, {
+      compile: async (source, manifest) => {
+        if (source.requestedFunctionality.includes("conformance.unavailable")) {
+          return attachMountArtifactPublisher(await linkAgentSource(source, manifest), { keyId: "reference", signature: "reference" });
+        }
+        const artifact = await attachMountArtifactPublisher(await linkAgentSource(
+          source, manifest,
+        ), { keyId: "reference", signature: "reference" });
+        return { ...artifact, linkedFunctionality: [...artifact.linkedFunctionality, "conformance.unavailable"] };
+      },
+    });
+
+    await expect(executors["compile.link_narrows"]()).rejects.toThrow("Linked functionality");
   });
 });
