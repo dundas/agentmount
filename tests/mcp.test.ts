@@ -165,6 +165,21 @@ describe("MCP binding", () => {
     expect(result?.structuredContent?.error).toBe("approval_required");
   });
 
+  test("rejects an idempotency key longer than the MCP schema limit before authorization", async () => {
+    const manifest = await fixtureManifest("effect");
+    const artifact = await fixtureArtifact(manifest);
+    const handlers = new Map<string, (input: Record<string, unknown>) => Promise<McpToolResult>>();
+    await registerAgentMountMcpToolsAsync({
+      manifest, artifact, verifyArtifactSignature,
+      server: { registerTool: (name, _definition, handler) => { handlers.set(name, handler); } },
+      mount: { mountId: context.mountId }, resolveContext: async () => ({ ...context, artifactDigest: artifact.artifactDigest, adapterDigest: manifest.adapterDigest }),
+      adapterSigningKeyIds: [],
+      invoker: { invoke: async () => ({ status: "completed", output: {}, auditId: "audit_test" }) },
+    });
+    const result = await handlers.get("test.item.get")?.({ idempotencyKey: "a".repeat(129) });
+    expect(result?.structuredContent?.error).toBe("invalid_argument");
+  });
+
   test("rejects a broker attestation signed by an adapter-held key", async () => {
     const manifest = await fixtureManifest("effect");
     const artifact = await fixtureArtifact(manifest);
