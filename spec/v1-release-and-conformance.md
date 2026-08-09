@@ -54,6 +54,28 @@ registers empty callbacks. The callbacks must test real mount lifecycle,
 revocation, generation, effect, replay, and intent behavior. The same suite
 must run without product-specific branches against at least two environments.
 
+### Reuse the shared compile cases
+
+The SDK provides the four `compile.*` executors and a product-neutral reference
+fixture. Compose them with your environment's remaining case executors instead
+of reimplementing deterministic linking, manifest binding, or artifact hygiene.
+
+```ts
+import {
+  createAgentMountV1CompileConformanceExecutors,
+  createAgentMountV1ReferenceFixture,
+} from "@agentmount/contracts/conformance";
+
+const fixture = await createAgentMountV1ReferenceFixture();
+const compileCases = createAgentMountV1CompileConformanceExecutors(fixture, {
+  compile: environmentAdapter.compile,
+});
+```
+
+The reference fixture includes idempotency keys in every idempotency-required
+input schema. It is an SDK test fixture, not a portable installation record or
+an environment's production manifest.
+
 ## MCP integration requirements
 
 `registerAgentMountMcpToolsAsync` must be awaited during server startup. It
