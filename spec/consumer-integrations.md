@@ -18,7 +18,12 @@ adopt.
   implements the `FunctionalityInvoker` effect boundary. Tool registration can
   move behind awaited `registerAgentMountMcpToolsAsync` startup registration.
 - Its mutation idempotency fingerprint maps to canonical argument binding and
-  the shared idempotency contract.
+  the shared idempotency contract. Each idempotency-required MCP input schema
+  must accept `idempotencyKey` (16–128 characters); the shared binding removes
+  it before the domain-argument digest.
+- Its adapter maps known native errors into Circle's typed authorization error
+  before invoking AgentMount, so the shared invoker can produce stable denied
+  or indeterminate outcomes instead of a generic unavailable result.
 
 ### Retain in Circle Computer
 
@@ -63,3 +68,6 @@ carriers: Circle Computer binds generation to its runtime connection, while
 Infinitrade binds it to a run. The shared invariant is that a credential or
 invocation carrying a non-current generation is denied before any native
 effect.
+
+See the [v1 release and conformance guide](v1-release-and-conformance.md) for
+the shared test-runner contract and stable-release checklist.

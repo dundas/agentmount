@@ -187,9 +187,11 @@ MCP tools. It does not create a second tool catalog or privilege model.
   the intersection of manifest functionality and `linkedFunctionality`.
 - The tool preserves the manifest operation kind, schemas, resource policy,
   reversibility, approval mode, idempotency policy, and intent deadline.
-- Tool arguments contain domain input only. Mount, tenant, principal,
-  environment account, runtime, grant, policy, and credential fields are
-  server-derived and rejected if presented as arguments.
+- Tool arguments contain domain input plus, when `idempotencyRequired` is true,
+  a required `idempotencyKey` string (16–128 characters). The binding removes
+  that envelope key before calculating the canonical domain-argument digest.
+  Mount, tenant, principal, environment account, runtime, grant, policy, and
+  credential fields are server-derived and rejected if presented as arguments.
 - An MCP connection credential authenticates the connection only. Every call
   re-resolves the mount, epoch, generation, adapter digest, grant, and policy.
 - Effect calls require separate `EffectAuthorization` evidence bound to the
@@ -197,6 +199,10 @@ MCP tools. It does not create a second tool catalog or privilege model.
 - Results use stable Agent Mount errors and bounded, redacted output. An
   ambiguous native effect returns an intent/reference for reconciliation rather
   than encouraging a blind retry.
+- Environment adapters normalize native failures into a typed
+  `AgentMountError` or `FunctionalityOutcome` before they reach the shared
+  binding. Raw environment errors must not rely on the generic unavailable
+  fallback when a stable denial or indeterminate outcome is known.
 
 The reference MCP boilerplate deliberately accepts an environment-owned
 invoker. The invoker is the policy/effect boundary and must implement grant
@@ -213,7 +219,9 @@ an additive adapter, not part of the v1 core.
 ## Conformance
 
 The same product-neutral harness must run without product-specific branches
-against at least two environments. v1 cases cover:
+against at least two environments. The `./conformance` export supplies the
+case inventory and runner; environments supply the real fixture and executor
+for each case. v1 cases cover:
 
 - link narrowing, deterministic artifact digests, manifest-content binding,
   and artifact hygiene;

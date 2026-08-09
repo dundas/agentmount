@@ -53,8 +53,8 @@ async function invokeTool(dependencies, functionality, rawArguments, artifactDig
       throw new AgentMountError("mount_inactive", "Active adapter digest does not match the registered manifest");
     }
     const { idempotencyKey, ...domainArguments } = rawArguments;
-    if (functionality.idempotencyRequired && (typeof idempotencyKey !== "string" || idempotencyKey.length < 16)) {
-      throw new AgentMountError("invalid_argument", "A stable idempotencyKey of at least 16 characters is required");
+    if (functionality.idempotencyRequired && (typeof idempotencyKey !== "string" || idempotencyKey.length < 16 || idempotencyKey.length > 128)) {
+      throw new AgentMountError("invalid_argument", "A stable idempotencyKey between 16 and 128 characters is required");
     }
     const bindingDigest = await argumentBindingDigest(domainArguments);
     const effectAuthorization = functionality.kind === "effect" ? await dependencies.resolveEffectAuthorization?.({ context, functionality, bindingDigest }) : undefined;

@@ -55,8 +55,9 @@ The draft is one dependency-light package with explicit subpath exports:
   its `registerAgentMountMcpToolsAsync` startup call must be awaited because it
   validates manifest and publisher integrity before registering only the
   artifact-linked functionality.
-- `@agentmount/contracts/conformance` — product-neutral v1 fixture and harness
-  interfaces shared by consumer environments.
+- `@agentmount/contracts/conformance` — product-neutral v1 case inventory,
+  suite runner, fixture, and harness interfaces shared by consumer
+  environments.
 
 These exports do not depend on AG-UI, MCP, ACP, or a policy SDK. Wire-specific
 SDK adapters are separate, additive packages after the core contract is proven
@@ -70,7 +71,9 @@ See [`examples/chat-binding.ts`](examples/chat-binding.ts) and
 [`examples/mcp-binding.ts`](examples/mcp-binding.ts) for integration skeletons,
 and [`examples/compile-mount.ts`](examples/compile-mount.ts) for deterministic
 linking. The [consumer integration map](spec/consumer-integrations.md) records
-the Circle Computer and Infinitrade extraction boundaries.
+the Circle Computer and Infinitrade extraction boundaries. For a copyable
+conformance test, MCP integration rules, and the stable-release checklist, see
+the [v1 release and conformance guide](spec/v1-release-and-conformance.md).
 
 ## Status
 
