@@ -1,7 +1,9 @@
 import type {
   AgentSource,
+  EffectAuthorization,
   EnvironmentManifest,
   FunctionalityDefinition,
+  FunctionalityOutcome,
   MountArtifact,
   ResolvedMountContext,
 } from "./core.js";
@@ -9,6 +11,8 @@ import type { StreamCursor } from "./chat.js";
 import {
   AgentMountError,
   AGENT_MOUNT_VERSION,
+  argumentBindingDigest,
+  assertEffectAuthorizationBinding,
 } from "./core.js";
 import {
   assertArtifactHygiene,
@@ -31,6 +35,19 @@ export interface AgentMountConformanceFixture {
 export interface AgentMountConformanceAdapter {
   compile(source: AgentSource, manifest: EnvironmentManifest): Promise<MountArtifact>;
   activate(artifact: MountArtifact): Promise<ResolvedMountContext>;
+  /** Invoke an effect with a pre-built `EffectAuthorization`. The adapter MUST call
+   * the contract's `assertEffectAuthorizationBinding` (the L4-native-authorizer,
+   * binding-digest, expiry, epoch/generation enforcement) before the dispatch; a
+   * binding failure → `{status: "denied", error: "authorization_invalid" | ...}`.
+   * This is the method the `authority.*` effect cases exercise (slice 2+).
+   * Adapters that don't implement effect invocation throw `ConformanceNotImplemented`
+   * → the case reports `not_applicable` (slice 1.5 partial-adapter posture). */
+  invokeEffect(input: {
+    context: ResolvedMountContext;
+    functionality: FunctionalityDefinition;
+    arguments: Record<string, unknown>;
+    effectAuthorization: EffectAuthorization;
+  }): Promise<FunctionalityOutcome>;
   revokeMount(context: ResolvedMountContext): Promise<void>;
   replaceRun(context: ResolvedMountContext): Promise<ResolvedMountContext>;
   replay(after: StreamCursor): Promise<readonly { cursor: StreamCursor; eventId: string }[]>;
@@ -195,18 +212,73 @@ export async function runConformanceCase(
       // L4 intent reconciliation). The runner case definitions will land
       // incrementally with the slice-2 prerequisite work. Marked not_applicable
       // so a consumer cannot mistake the 4 compile passes for full v1 coverage.
+      // ── authority.irreversible_requires_l4_native (slice 2) ──────────────
+      // The L4 core invariant: an irreversible effect invoked with a BROKER authorizer
+      // is denied (authorization_invalid) — the contract's `assertEffectAuthorizationBinding`
+      // enforces `!reversible && authorizerKind !== "environment_native"` (core.js:169-170).
+      // The adapter's `invokeEffect` MUST call that check; the case proves it does by
+      // building a broker auth with a CORRECT bindingDigest (so the check reaches the
+      // L4-native line, not argument_binding_mismatch) + a valid future expiry + matching
+      // mount/epoch/generation → the only failing check is the authorizer-kind one.
+      case "authority.irreversible_requires_l4_native": {
+        const artifact = await adapter.compile(fixture.source, fixture.manifest);
+        const context = await adapter.activate(artifact);
+        const args = { id: "ref_item_1" }; // a dummy arg to compute a bindingDigest (the case tests the L4-native enforcement, not the arg schema; the adapter recomputes argumentBindingDigest(input.arguments) — same args → same digest → the bindingDigest check passes → the L4-native line fires)
+        const bindingDigest = await argumentBindingDigest(args);
+        const brokerAuth: EffectAuthorization = {
+          authorizationId: "auth_broker_attempt",
+          authorizerKind: "mount_broker",
+          argumentBinding: "broker_attested",
+          bindingDigest,
+          mountId: context.mountId,
+          mountEpoch: context.mountEpoch,
+          runGeneration: context.runGeneration,
+          functionalityId: fixture.irreversibleEffect.id,
+          principalId: context.principalId,
+          expiresAt: "9999-12-31T23:59:59.000Z", // far-future (not the expiry check)
+          assurance: "conformance:broker_attempt",
+          attestation: { keyId: "broker_key_not_held_by_adapter", signature: "broker_sig" },
+        };
+        const outcome = await adapter.invokeEffect({
+          context,
+          functionality: fixture.irreversibleEffect,
+          arguments: args,
+          effectAuthorization: brokerAuth,
+        });
+        if (outcome.status !== "denied" || outcome.error !== "authorization_invalid") {
+          throw new ConformanceAssertionError(
+            `irreversible effect with a broker authorizer must be denied (authorization_invalid); got ${JSON.stringify(outcome)}`,
+          );
+        }
+        return { case: name, status: "pass" };
+      }
+
+      // ── not yet implemented (10) — authority.* (the other 6) / replay.* / intent.* ─
+      // These need adapter methods the runner hasn't case-defined yet (revokeMount →
+      // real mount store; replay → chat transport; sweepIntents → L4 intent
+      // reconciliation). intent.pending_becomes_indeterminate specifically needs
+      // sweepIntents (the chat/MountRuntime path), which Circle's MCP-only slice 2
+      // does NOT implement → stays not_applicable (S2-D3).
       case "authority.ungranted_functionality_denied":
       case "authority.revoked_mount_denied_before_effect":
       case "authority.stale_run_generation_denied":
       case "authority.forged_context_denied":
       case "authority.broker_adapter_key_separation":
       case "authority.argument_tampering_denied":
-      case "authority.irreversible_requires_l4_native":
       case "replay.idempotent_turn":
       case "replay.generation_cursor":
       case "replay.persist_before_fanout":
-      case "intent.pending_becomes_indeterminate":
         return { case: name, status: "not_applicable", reason: "runner case not yet implemented (slice 1.5)" };
+
+      // ── intent.pending_becomes_indeterminate — stays not_applicable (slice 2) ─
+      // Needs `sweepIntents` (the chat/MountRuntime ABI), which Circle's MCP-only
+      // slice 2 does NOT implement (S2-D3: the synchronous MCP path is sync-or-throw,
+      // never `pending`; the intent sweep is deferred to the chat path). The case
+      // body + the adapter's sweepIntents land with the MountRuntime slice. Until
+      // then, this is honestly `not_applicable` — a green report does NOT claim the
+      // intent sweep is covered.
+      case "intent.pending_becomes_indeterminate":
+        return { case: name, status: "not_applicable", reason: "runner case not yet implemented (slice 1.5); needs sweepIntents (the chat/MountRuntime path, deferred per S2-D3)" };
 
       default: {
         // Exhaustiveness guard: if a case is added to the registry but not handled
@@ -328,6 +400,7 @@ async function expectRejects(
 // conformance subpath can build adapters without a second import.
 export {
   assertArtifactHygiene,
+  assertEffectAuthorizationBinding,
   assertEnvironmentManifestDigest,
   attachMountArtifactPublisher,
   computeEnvironmentManifestDigest,

@@ -1,5 +1,6 @@
-import type { AgentSource, EnvironmentManifest, FunctionalityDefinition, MountArtifact, ResolvedMountContext } from "./core.js";
+import type { AgentSource, EffectAuthorization, EnvironmentManifest, FunctionalityDefinition, FunctionalityOutcome, MountArtifact, ResolvedMountContext } from "./core.js";
 import type { StreamCursor } from "./chat.js";
+import { assertEffectAuthorizationBinding } from "./core.js";
 import { assertArtifactHygiene, assertEnvironmentManifestDigest, attachMountArtifactPublisher, computeEnvironmentManifestDigest, computeMountArtifactDigest, linkAgentSource, verifyMountArtifact } from "./compiler.js";
 /** Product-neutral fixtures consumed unchanged by every environment harness. */
 export interface AgentMountConformanceFixture {
@@ -11,6 +12,19 @@ export interface AgentMountConformanceFixture {
 export interface AgentMountConformanceAdapter {
     compile(source: AgentSource, manifest: EnvironmentManifest): Promise<MountArtifact>;
     activate(artifact: MountArtifact): Promise<ResolvedMountContext>;
+    /** Invoke an effect with a pre-built `EffectAuthorization`. The adapter MUST call
+     * the contract's `assertEffectAuthorizationBinding` (the L4-native-authorizer,
+     * binding-digest, expiry, epoch/generation enforcement) before the dispatch; a
+     * binding failure → `{status: "denied", error: "authorization_invalid" | ...}`.
+     * This is the method the `authority.*` effect cases exercise (slice 2+).
+     * Adapters that don't implement effect invocation throw `ConformanceNotImplemented`
+     * → the case reports `not_applicable` (slice 1.5 partial-adapter posture). */
+    invokeEffect(input: {
+        context: ResolvedMountContext;
+        functionality: FunctionalityDefinition;
+        arguments: Record<string, unknown>;
+        effectAuthorization: EffectAuthorization;
+    }): Promise<FunctionalityOutcome>;
     revokeMount(context: ResolvedMountContext): Promise<void>;
     replaceRun(context: ResolvedMountContext): Promise<ResolvedMountContext>;
     replay(after: StreamCursor): Promise<readonly {
@@ -57,4 +71,4 @@ export declare function runConformance(fixture: AgentMountConformanceFixture, ad
  * fixture's manifest carries the reversible + irreversible effects so the
  * authority.* cases have both kinds to test. */
 export declare function referenceFixture(): Promise<AgentMountConformanceFixture>;
-export { assertArtifactHygiene, assertEnvironmentManifestDigest, attachMountArtifactPublisher, computeEnvironmentManifestDigest, computeMountArtifactDigest, linkAgentSource, verifyMountArtifact, };
+export { assertArtifactHygiene, assertEffectAuthorizationBinding, assertEnvironmentManifestDigest, attachMountArtifactPublisher, computeEnvironmentManifestDigest, computeMountArtifactDigest, linkAgentSource, verifyMountArtifact, };

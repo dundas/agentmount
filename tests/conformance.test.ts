@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AGENT_MOUNT_V1_CONFORMANCE_CASES,
   ConformanceNotImplemented,
+  assertEffectAuthorizationBinding,
   type AgentMountConformanceAdapter,
   type AgentMountConformanceFixture,
   type ConformanceReport,
@@ -10,6 +11,7 @@ import {
   runConformanceCase,
 } from "../src/conformance.ts";
 import { attachMountArtifactPublisher, linkAgentSource } from "../src/compiler.ts";
+import { AgentMountError, argumentBindingDigest } from "../src/core.ts";
 
 /** The reference adapter for self-testing the runner. Implements `compile`
  * (the contract's own compiler path — `linkAgentSource` + `attachMountArtifact
@@ -24,6 +26,7 @@ function referenceAdapter(): AgentMountConformanceAdapter {
       return attachMountArtifactPublisher(linked, { keyId: "ref", signature: "ref" });
     },
     async activate() { throw new ConformanceNotImplemented("activate"); },
+    async invokeEffect() { throw new ConformanceNotImplemented("invokeEffect"); },
     async revokeMount() { throw new ConformanceNotImplemented("revokeMount"); },
     async replaceRun() { throw new ConformanceNotImplemented("replaceRun"); },
     async replay() { throw new ConformanceNotImplemented("replay"); },
@@ -106,5 +109,87 @@ describe("conformance runner", () => {
     };
     const r = await runConformanceCase("compile.deterministic_artifact_digest", fixture, nondeterministic);
     expect(r.status).toBe("fail");
+  });
+
+  test("authority.irreversible_requires_l4_native: a full adapter (compile+activate+invokeEffect) PASSES — a broker auth on an irreversible effect → denied (authorization_invalid)", async () => {
+    // The reference adapter throws ConformanceNotImplemented for activate → the case
+    // is not_applicable. This test builds a FULL adapter whose invokeEffect calls the
+    // contract's assertEffectAuthorizationBinding (the L4-native enforcement) → the
+    // broker auth on the irreversible effect → authorization_invalid → denied.
+    fixture = await referenceFixture();
+    const fullAdapter: AgentMountConformanceAdapter = {
+      ...referenceAdapter(),
+      async activate(artifact) {
+        // A minimal resolved context matching the fixture's manifest (the L4-native
+        // check reads mountId/mountEpoch/runGeneration/principalId; the bindingDigest
+        // check is satisfied because the case builds a matching digest).
+        return {
+          protocolVersion: "agent-mount/v1",
+          mountId: "mount_ref",
+          environmentId: fixture.manifest.environmentId,
+          environmentAccountId: "tenant_ref",
+          agentId: fixture.source.agentId,
+          releaseId: "release_ref",
+          artifactDigest: artifact.artifactDigest,
+          principalId: "user_ref",
+          adapterDigest: fixture.manifest.adapterDigest,
+          policyVersion: "policy_ref",
+          mountEpoch: 1,
+          threadId: "thread_ref",
+          runId: "run_ref",
+          runGeneration: 1,
+          traceId: "trace_ref",
+        };
+      },
+      async invokeEffect(input) {
+        // The adapter's invokeEffect MUST call assertEffectAuthorizationBinding
+        // (the L4-native enforcement). This is what the case tests — a broker auth
+        // on an irreversible effect → authorization_invalid → denied.
+        try {
+          assertEffectAuthorizationBinding({
+            authorization: input.effectAuthorization,
+            context: input.context,
+            functionality: input.functionality,
+            bindingDigest: await argumentBindingDigest(input.arguments),
+            adapterSigningKeyIds: [],
+          });
+        } catch (error) {
+          if (error instanceof AgentMountError) {
+            return { status: "denied" as const, error: error.code, auditId: "audit_ref" };
+          }
+          throw error;
+        }
+        // The binding check passed (environment_native) — the dispatch would run.
+        // For this conformance case the broker attempt never reaches here.
+        return { status: "completed" as const, output: { ok: true }, auditId: "audit_ref" };
+      },
+    };
+    const r = await runConformanceCase("authority.irreversible_requires_l4_native", fixture, fullAdapter);
+    expect(r.status).toBe("pass");
+  });
+
+  test("authority.irreversible_requires_l4_native: an adapter whose invokeEffect SKIPS the binding check → the broker auth slips through → FAIL", async () => {
+    // The negative case: an adapter that does NOT call assertEffectAuthorizationBinding
+    // (the L4-native enforcement) → the broker auth reaches the dispatch → completed
+    // (NOT denied) → the case fails. This proves the case catches a missing enforcement.
+    fixture = await referenceFixture();
+    const badAdapter: AgentMountConformanceAdapter = {
+      ...referenceAdapter(),
+      async activate(artifact) {
+        return {
+          protocolVersion: "agent-mount/v1", mountId: "mount_ref", environmentId: fixture.manifest.environmentId,
+          environmentAccountId: "tenant_ref", agentId: fixture.source.agentId, releaseId: "release_ref",
+          artifactDigest: artifact.artifactDigest, principalId: "user_ref", adapterDigest: fixture.manifest.adapterDigest,
+          policyVersion: "policy_ref", mountEpoch: 1, threadId: "thread_ref", runId: "run_ref", runGeneration: 1, traceId: "trace_ref",
+        };
+      },
+      async invokeEffect(_input) {
+        // BAD: skips assertEffectAuthorizationBinding → the broker auth is not enforced.
+        return { status: "completed" as const, output: { ok: true }, auditId: "audit_ref" };
+      },
+    };
+    const r = await runConformanceCase("authority.irreversible_requires_l4_native", fixture, badAdapter);
+    expect(r.status).toBe("fail");
+    expect(r.reason).toContain("authorization_invalid");
   });
 });

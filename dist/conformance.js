@@ -1,7 +1,9 @@
 // src/conformance.ts
 import {
   AgentMountError,
-  AGENT_MOUNT_VERSION
+  AGENT_MOUNT_VERSION,
+  argumentBindingDigest,
+  assertEffectAuthorizationBinding
 } from "./core.js";
 import {
   assertArtifactHygiene,
@@ -84,18 +86,48 @@ async function runConformanceCase(name, fixture, adapter) {
         await expectRejects(() => adapter.compile(dirty, fixture.manifest), (e) => e instanceof AgentMountError && e.code === "invalid_argument", "a source with a forbidden authority field must fail hygiene");
         return { case: name, status: "pass" };
       }
+      case "authority.irreversible_requires_l4_native": {
+        const artifact = await adapter.compile(fixture.source, fixture.manifest);
+        const context = await adapter.activate(artifact);
+        const args = { id: "ref_item_1" };
+        const bindingDigest = await argumentBindingDigest(args);
+        const brokerAuth = {
+          authorizationId: "auth_broker_attempt",
+          authorizerKind: "mount_broker",
+          argumentBinding: "broker_attested",
+          bindingDigest,
+          mountId: context.mountId,
+          mountEpoch: context.mountEpoch,
+          runGeneration: context.runGeneration,
+          functionalityId: fixture.irreversibleEffect.id,
+          principalId: context.principalId,
+          expiresAt: "9999-12-31T23:59:59.000Z",
+          assurance: "conformance:broker_attempt",
+          attestation: { keyId: "broker_key_not_held_by_adapter", signature: "broker_sig" }
+        };
+        const outcome = await adapter.invokeEffect({
+          context,
+          functionality: fixture.irreversibleEffect,
+          arguments: args,
+          effectAuthorization: brokerAuth
+        });
+        if (outcome.status !== "denied" || outcome.error !== "authorization_invalid") {
+          throw new ConformanceAssertionError(`irreversible effect with a broker authorizer must be denied (authorization_invalid); got ${JSON.stringify(outcome)}`);
+        }
+        return { case: name, status: "pass" };
+      }
       case "authority.ungranted_functionality_denied":
       case "authority.revoked_mount_denied_before_effect":
       case "authority.stale_run_generation_denied":
       case "authority.forged_context_denied":
       case "authority.broker_adapter_key_separation":
       case "authority.argument_tampering_denied":
-      case "authority.irreversible_requires_l4_native":
       case "replay.idempotent_turn":
       case "replay.generation_cursor":
       case "replay.persist_before_fanout":
-      case "intent.pending_becomes_indeterminate":
         return { case: name, status: "not_applicable", reason: "runner case not yet implemented (slice 1.5)" };
+      case "intent.pending_becomes_indeterminate":
+        return { case: name, status: "not_applicable", reason: "runner case not yet implemented (slice 1.5); needs sweepIntents (the chat/MountRuntime path, deferred per S2-D3)" };
       default: {
         const _exhaustive = name;
         return { case: name, status: "not_applicable", reason: `unhandled case: ${String(_exhaustive)}` };
@@ -210,6 +242,7 @@ export {
   computeEnvironmentManifestDigest,
   attachMountArtifactPublisher,
   assertEnvironmentManifestDigest,
+  assertEffectAuthorizationBinding,
   assertArtifactHygiene,
   ConformanceNotImplemented,
   AGENT_MOUNT_V1_CONFORMANCE_CASES
