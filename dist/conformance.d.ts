@@ -1,4 +1,4 @@
-import type { AgentSource, EnvironmentManifest, FunctionalityDefinition, MountArtifact, ResolvedMountContext } from "./core.js";
+import type { AgentSource, EffectAuthorization, EnvironmentManifest, FunctionalityDefinition, FunctionalityOutcome, MountArtifact, ResolvedMountContext } from "./core.js";
 import type { StreamCursor } from "./chat.js";
 /** Product-neutral fixtures consumed unchanged by every environment harness. */
 export interface AgentMountConformanceFixture {
@@ -21,10 +21,21 @@ export interface AgentMountConformanceAdapter {
         outcome: "indeterminate";
     }[]>;
 }
+/** The minimal environment surface needed to prove the L4 native-authorizer rule. */
+export interface AgentMountV1IrreversibleEffectConformanceAdapter extends Pick<AgentMountConformanceAdapter, "compile" | "activate"> {
+    invokeEffect(input: {
+        context: ResolvedMountContext;
+        functionality: FunctionalityDefinition;
+        arguments: Readonly<Record<string, unknown>>;
+        effectAuthorization: EffectAuthorization;
+    }): Promise<FunctionalityOutcome>;
+}
 export declare const AGENT_MOUNT_V1_CONFORMANCE_CASES: readonly ["compile.link_narrows", "compile.deterministic_artifact_digest", "compile.manifest_digest_binds_exports", "compile.artifact_hygiene", "authority.ungranted_functionality_denied", "authority.revoked_mount_denied_before_effect", "authority.stale_run_generation_denied", "authority.forged_context_denied", "authority.broker_adapter_key_separation", "authority.argument_tampering_denied", "authority.irreversible_requires_l4_native", "replay.idempotent_turn", "replay.generation_cursor", "replay.persist_before_fanout", "intent.pending_becomes_indeterminate"];
 export type AgentMountV1ConformanceCase = (typeof AGENT_MOUNT_V1_CONFORMANCE_CASES)[number];
 export declare const AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES: readonly ["compile.link_narrows", "compile.deterministic_artifact_digest", "compile.manifest_digest_binds_exports", "compile.artifact_hygiene"];
 export type AgentMountV1CompileConformanceCase = (typeof AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES)[number];
+export declare const AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES: readonly ["authority.irreversible_requires_l4_native"];
+export type AgentMountV1IrreversibleEffectConformanceCase = (typeof AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES)[number];
 /** One product-neutral implementation for every required v1 conformance case. */
 export type AgentMountConformanceCaseExecutor = () => void | Promise<void>;
 /**
@@ -59,6 +70,12 @@ export declare class AgentMountConformanceError extends Error {
  * executors in one `AgentMountV1ConformanceSuite`.
  */
 export declare function createAgentMountV1CompileConformanceExecutors(fixture: AgentMountConformanceFixture, adapter: Pick<AgentMountConformanceAdapter, "compile">): Readonly<Record<AgentMountV1CompileConformanceCase, AgentMountConformanceCaseExecutor>>;
+/**
+ * Creates the L4 native-authorizer executor. The environment's `invokeEffect`
+ * must apply `assertEffectAuthorizationBinding` before it dispatches an
+ * effect; a broker authorization for an irreversible effect must be denied.
+ */
+export declare function createAgentMountV1IrreversibleEffectConformanceExecutors(fixture: AgentMountConformanceFixture, adapter: AgentMountV1IrreversibleEffectConformanceAdapter, domainArguments: Readonly<Record<string, unknown>>): Readonly<Record<AgentMountV1IrreversibleEffectConformanceCase, AgentMountConformanceCaseExecutor>>;
 /** Product-neutral fixture for testing the shared compile cases and adapters. */
 export declare function createAgentMountV1ReferenceFixture(): Promise<AgentMountConformanceFixture>;
 /**

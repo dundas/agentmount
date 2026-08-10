@@ -76,6 +76,22 @@ The reference fixture includes idempotency keys in every idempotency-required
 input schema. It is an SDK test fixture, not a portable installation record or
 an environment's production manifest.
 
+### Prove the L4 native-authorizer rule
+
+For an irreversible effect, compose the L4 executor with an adapter method
+that invokes the environment's effect boundary. That boundary must call
+`assertEffectAuthorizationBinding` before native dispatch. The executor gives
+it a broker authorization with otherwise-correct binding data and requires the
+stable `authorization_invalid` denial.
+
+```ts
+const l4Cases = createAgentMountV1IrreversibleEffectConformanceExecutors(
+  fixture,
+  { compile: environmentAdapter.compile, activate: environmentAdapter.activate, invokeEffect: environmentAdapter.invokeEffect },
+  { id: "the-environment-specific-resource-id" },
+);
+```
+
 ## MCP integration requirements
 
 `registerAgentMountMcpToolsAsync` must be awaited during server startup. It
