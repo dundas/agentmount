@@ -1,11 +1,13 @@
 import type {
   AgentSource,
+  EffectAuthorization,
   EnvironmentManifest,
   FunctionalityDefinition,
+  FunctionalityOutcome,
   MountArtifact,
   ResolvedMountContext,
 } from "./core.js";
-import { AGENT_MOUNT_VERSION, AgentMountError } from "./core.js";
+import { AGENT_MOUNT_VERSION, AgentMountError, argumentBindingDigest } from "./core.js";
 import type { StreamCursor } from "./chat.js";
 import { computeEnvironmentManifestDigest, computeMountArtifactDigest } from "./compiler.js";
 
@@ -24,6 +26,16 @@ export interface AgentMountConformanceAdapter {
   replaceRun(context: ResolvedMountContext): Promise<ResolvedMountContext>;
   replay(after: StreamCursor): Promise<readonly { cursor: StreamCursor; eventId: string }[]>;
   sweepIntents(now: number): Promise<readonly { intentId: string; outcome: "indeterminate" }[]>;
+}
+
+/** The minimal environment surface needed to prove the L4 native-authorizer rule. */
+export interface AgentMountV1IrreversibleEffectConformanceAdapter extends Pick<AgentMountConformanceAdapter, "compile" | "activate"> {
+  invokeEffect(input: {
+    context: ResolvedMountContext;
+    functionality: FunctionalityDefinition;
+    arguments: Readonly<Record<string, unknown>>;
+    effectAuthorization: EffectAuthorization;
+  }): Promise<FunctionalityOutcome>;
 }
 
 export const AGENT_MOUNT_V1_CONFORMANCE_CASES = [
@@ -54,6 +66,13 @@ export const AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES = [
 ] as const satisfies readonly AgentMountV1ConformanceCase[];
 
 export type AgentMountV1CompileConformanceCase = (typeof AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES)[number];
+
+export const AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES = [
+  "authority.irreversible_requires_l4_native",
+] as const satisfies readonly AgentMountV1ConformanceCase[];
+
+export type AgentMountV1IrreversibleEffectConformanceCase =
+  (typeof AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES)[number];
 
 /** One product-neutral implementation for every required v1 conformance case. */
 export type AgentMountConformanceCaseExecutor = () => void | Promise<void>;
@@ -140,6 +159,51 @@ export function createAgentMountV1CompileConformanceExecutors(
         "invalid_argument",
         "A portable source containing mutable authority must be denied",
       );
+    },
+  };
+}
+
+/**
+ * Creates the L4 native-authorizer executor. The environment's `invokeEffect`
+ * must apply `assertEffectAuthorizationBinding` before it dispatches an
+ * effect; a broker authorization for an irreversible effect must be denied.
+ */
+export function createAgentMountV1IrreversibleEffectConformanceExecutors(
+  fixture: AgentMountConformanceFixture,
+  adapter: AgentMountV1IrreversibleEffectConformanceAdapter,
+  domainArguments: Readonly<Record<string, unknown>>,
+): Readonly<Record<AgentMountV1IrreversibleEffectConformanceCase, AgentMountConformanceCaseExecutor>> {
+  return {
+    "authority.irreversible_requires_l4_native": async () => {
+      const source = {
+        ...fixture.source,
+        requestedFunctionality: [...fixture.source.requestedFunctionality, fixture.irreversibleEffect.id].sort(),
+      };
+      const artifact = await adapter.compile(source, fixture.manifest);
+      const context = await adapter.activate(artifact);
+      const effectAuthorization: EffectAuthorization = {
+        authorizationId: "conformance_broker_attempt",
+        authorizerKind: "mount_broker",
+        argumentBinding: "broker_attested",
+        bindingDigest: await argumentBindingDigest(domainArguments),
+        mountId: context.mountId,
+        mountEpoch: context.mountEpoch,
+        runGeneration: context.runGeneration,
+        functionalityId: fixture.irreversibleEffect.id,
+        principalId: context.principalId,
+        expiresAt: "9999-12-31T23:59:59.000Z",
+        assurance: "conformance_broker_attempt",
+        attestation: { keyId: "conformance_broker_key", signature: "conformance_signature" },
+      };
+      const outcome = await adapter.invokeEffect({
+        context,
+        functionality: fixture.irreversibleEffect,
+        arguments: domainArguments,
+        effectAuthorization,
+      });
+      if (outcome.status !== "denied" || outcome.error !== "authorization_invalid") {
+        throw new Error("An irreversible effect authorized by a broker must be denied with authorization_invalid");
+      }
     },
   };
 }

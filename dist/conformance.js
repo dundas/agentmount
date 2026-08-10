@@ -1,5 +1,5 @@
 // src/conformance.ts
-import { AGENT_MOUNT_VERSION, AgentMountError } from "./core.js";
+import { AGENT_MOUNT_VERSION, AgentMountError, argumentBindingDigest } from "./core.js";
 import { computeEnvironmentManifestDigest, computeMountArtifactDigest } from "./compiler.js";
 var AGENT_MOUNT_V1_CONFORMANCE_CASES = [
   "compile.link_narrows",
@@ -23,6 +23,9 @@ var AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES = [
   "compile.deterministic_artifact_digest",
   "compile.manifest_digest_binds_exports",
   "compile.artifact_hygiene"
+];
+var AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES = [
+  "authority.irreversible_requires_l4_native"
 ];
 
 class AgentMountConformanceError extends Error {
@@ -64,6 +67,41 @@ function createAgentMountV1CompileConformanceExecutors(fixture, adapter) {
     "compile.artifact_hygiene": async () => {
       const authorityBearingSource = { ...fixture.source, grant: "must-not-be-portable" };
       await expectAgentMountError(() => adapter.compile(authorityBearingSource, fixture.manifest), "invalid_argument", "A portable source containing mutable authority must be denied");
+    }
+  };
+}
+function createAgentMountV1IrreversibleEffectConformanceExecutors(fixture, adapter, domainArguments) {
+  return {
+    "authority.irreversible_requires_l4_native": async () => {
+      const source = {
+        ...fixture.source,
+        requestedFunctionality: [...fixture.source.requestedFunctionality, fixture.irreversibleEffect.id].sort()
+      };
+      const artifact = await adapter.compile(source, fixture.manifest);
+      const context = await adapter.activate(artifact);
+      const effectAuthorization = {
+        authorizationId: "conformance_broker_attempt",
+        authorizerKind: "mount_broker",
+        argumentBinding: "broker_attested",
+        bindingDigest: await argumentBindingDigest(domainArguments),
+        mountId: context.mountId,
+        mountEpoch: context.mountEpoch,
+        runGeneration: context.runGeneration,
+        functionalityId: fixture.irreversibleEffect.id,
+        principalId: context.principalId,
+        expiresAt: "9999-12-31T23:59:59.000Z",
+        assurance: "conformance_broker_attempt",
+        attestation: { keyId: "conformance_broker_key", signature: "conformance_signature" }
+      };
+      const outcome = await adapter.invokeEffect({
+        context,
+        functionality: fixture.irreversibleEffect,
+        arguments: domainArguments,
+        effectAuthorization
+      });
+      if (outcome.status !== "denied" || outcome.error !== "authorization_invalid") {
+        throw new Error("An irreversible effect authorized by a broker must be denied with authorization_invalid");
+      }
     }
   };
 }
@@ -174,9 +212,11 @@ async function expectAgentMountError(operation, code, message) {
 export {
   runAgentMountV1Conformance,
   createAgentMountV1ReferenceFixture,
+  createAgentMountV1IrreversibleEffectConformanceExecutors,
   createAgentMountV1CompileConformanceExecutors,
   assertAgentMountV1Conformance,
   AgentMountConformanceError,
+  AGENT_MOUNT_V1_IRREVERSIBLE_EFFECT_CONFORMANCE_CASES,
   AGENT_MOUNT_V1_CONFORMANCE_CASES,
   AGENT_MOUNT_V1_COMPILE_CONFORMANCE_CASES
 };

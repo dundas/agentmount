@@ -4,11 +4,13 @@ import {
   AgentMountConformanceError,
   assertAgentMountV1Conformance,
   createAgentMountV1CompileConformanceExecutors,
+  createAgentMountV1IrreversibleEffectConformanceExecutors,
   createAgentMountV1ReferenceFixture,
   runAgentMountV1Conformance,
   type AgentMountV1ConformanceCase,
 } from "../src/conformance.ts";
 import { attachMountArtifactPublisher, linkAgentSource } from "../src/compiler.ts";
+import { AgentMountError, argumentBindingDigest, assertEffectAuthorizationBinding } from "../src/core.ts";
 
 function suite(overrides: Partial<Record<AgentMountV1ConformanceCase, () => void | Promise<void>>> = {}) {
   return {
@@ -80,5 +82,55 @@ describe("AgentMount v1 conformance runner", () => {
     });
 
     await expect(executors["compile.link_narrows"]()).rejects.toThrow("Linked functionality");
+  });
+
+  test("L4 executor denies a broker-authorized irreversible effect", async () => {
+    const fixture = await createAgentMountV1ReferenceFixture();
+    const executors = createAgentMountV1IrreversibleEffectConformanceExecutors(fixture, {
+      compile: async (source, manifest) =>
+        attachMountArtifactPublisher(await linkAgentSource(source, manifest), { keyId: "reference", signature: "reference" }),
+      activate: async (artifact) => ({
+        protocolVersion: "agent-mount/v1", mountId: "mount_reference", environmentId: fixture.manifest.environmentId,
+        environmentAccountId: "account_reference", agentId: fixture.source.agentId, releaseId: "release_reference",
+        artifactDigest: artifact.artifactDigest, principalId: "principal_reference", adapterDigest: fixture.manifest.adapterDigest,
+        policyVersion: "policy_reference", mountEpoch: 1, threadId: "thread_reference", runId: "run_reference",
+        runGeneration: 1, traceId: "trace_reference",
+      }),
+      invokeEffect: async (input) => {
+        try {
+          assertEffectAuthorizationBinding({
+            authorization: input.effectAuthorization,
+            context: input.context,
+            functionality: input.functionality,
+            bindingDigest: await argumentBindingDigest(input.arguments),
+            adapterSigningKeyIds: [],
+          });
+        } catch (error) {
+          if (error instanceof AgentMountError) return { status: "denied", error: error.code, auditId: "audit_reference" };
+          throw error;
+        }
+        return { status: "completed", output: {}, auditId: "audit_reference" };
+      },
+    }, { id: "reference_item" });
+
+    await executors["authority.irreversible_requires_l4_native"]();
+  });
+
+  test("L4 executor rejects an adapter that skips effect-authorization binding", async () => {
+    const fixture = await createAgentMountV1ReferenceFixture();
+    const executors = createAgentMountV1IrreversibleEffectConformanceExecutors(fixture, {
+      compile: async (source, manifest) =>
+        attachMountArtifactPublisher(await linkAgentSource(source, manifest), { keyId: "reference", signature: "reference" }),
+      activate: async (artifact) => ({
+        protocolVersion: "agent-mount/v1", mountId: "mount_reference", environmentId: fixture.manifest.environmentId,
+        environmentAccountId: "account_reference", agentId: fixture.source.agentId, releaseId: "release_reference",
+        artifactDigest: artifact.artifactDigest, principalId: "principal_reference", adapterDigest: fixture.manifest.adapterDigest,
+        policyVersion: "policy_reference", mountEpoch: 1, threadId: "thread_reference", runId: "run_reference",
+        runGeneration: 1, traceId: "trace_reference",
+      }),
+      invokeEffect: async () => ({ status: "completed", output: {}, auditId: "audit_reference" }),
+    }, { id: "reference_item" });
+
+    await expect(executors["authority.irreversible_requires_l4_native"]()).rejects.toThrow("broker must be denied");
   });
 });
